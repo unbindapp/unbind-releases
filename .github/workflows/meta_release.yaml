@@ -1,0 +1,145 @@
+name: Meta Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  repository_dispatch:
+    types: [image-ready]
+
+jobs:
+  dispatch-builds:
+    name: Dispatch Builds
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      # Create a release to track progress
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          release_name: Unbind ${{ steps.get_version.outputs.VERSION }} (In Progress)
+          body: |
+            Release in progress...
+          draft: false
+          prerelease: true
+
+      # Step 1: Trigger unbind-builder build first
+      - name: Trigger unbind-builder build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: unbindapp/unbind-builder
+          event-type: build-release
+          client-payload: |
+            {
+              "version": "${{ steps.get_version.outputs.VERSION }}",
+              "release_id": "${{ steps.create_release.outputs.id }}"
+            }
+
+      # Also trigger operator and UI in parallel
+      - name: Trigger unbind-operator build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: unbindapp/unbind-operator
+          event-type: build-release
+          client-payload: |
+            {
+              "version": "${{ steps.get_version.outputs.VERSION }}",
+              "release_id": "${{ steps.create_release.outputs.id }}"
+            }
+
+      - name: Trigger unbind-ui build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: unbindapp/unbind-ui
+          event-type: build-release
+          client-payload: |
+            {
+              "version": "${{ steps.get_version.outputs.VERSION }}",
+              "release_id": "${{ steps.create_release.outputs.id }}"
+            }
+
+  continue-after-image:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'image-ready'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if builder image is ready and trigger API build
+        if: github.event.client_payload.component == 'builder'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: unbindapp/unbind-api
+          event-type: build-release
+          client-payload: |
+            {
+              "version": "${{ github.event.client_payload.version }}",
+              "builder_image": "unbindapp/unbind-builder:${{ github.event.client_payload.version }}",
+              "release_id": "${{ github.event.client_payload.release_id }}"
+            }
+
+  check-status:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'image-ready'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Store component status
+        id: store_status
+        run: |
+          # Create directory to store status files
+          mkdir -p /tmp/component_status
+
+          # Save status for current component
+          echo "completed" > /tmp/component_status/${{ github.event.client_payload.component }}
+
+          # Check status of all required components
+          ALL_COMPLETED=true
+
+          # Define all required components
+          COMPONENTS=("builder" "api" "operator" "ui")
+
+          for component in "${COMPONENTS[@]}"; do
+            if [ ! -f "/tmp/component_status/$component" ]; then
+              ALL_COMPLETED=false
+              break
+            fi
+          done
+
+          # If all components are complete, update release
+          if [ "$ALL_COMPLETED" = true ]; then
+            echo "all_completed=true" >> $GITHUB_OUTPUT
+          else
+            echo "all_completed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Finalize release
+        if: steps.store_status.outputs.all_completed == 'true'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const releaseId = '${{ github.event.client_payload.release_id }}';
+            const version = '${{ github.event.client_payload.version }}';
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              name: `Unbind ${version}`,
+              body: `## Docker images for \`${version}\`
+              | Component | Pull command |
+              |-----------|--------------|
+              | Builder   | [\`docker pull unbindapp/unbind-builder:${version}\`](https://hub.docker.com/r/unbindapp/unbind-builder/tags?name=${version}) |
+              | API       | [\`docker pull unbindapp/unbind-api:${version}\`](https://hub.docker.com/r/unbindapp/unbind-api/tags?name=${version}) |
+              | Operator  | [\`docker pull unbindapp/unbind-operator:${version}\`](https://hub.docker.com/r/unbindapp/unbind-operator/tags?name=${version}) |
+              | Web       | [\`docker pull unbindapp/unbind-ui:${version}\`](https://hub.docker.com/r/unbindapp/unbind-ui/tags?name=${version}) |`,
+              prerelease: false
+            });
