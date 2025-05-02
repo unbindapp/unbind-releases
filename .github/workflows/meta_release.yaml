@@ -36,7 +36,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          repository: unbindapp/unbind-builder
+          repository: unbindapp/unbind-api
           event-type: build-release
           client-payload: |
             {
