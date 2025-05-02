@@ -92,6 +92,8 @@ jobs:
             const version = '${{ github.event.client_payload.version }}';
             const component = '${{ github.event.client_payload.component }}';
 
+            console.log(`Processing component: ${component} for version ${version}`);
+
             try {
               // First get the current release data
               const release = await github.rest.repos.getRelease({
@@ -103,33 +105,44 @@ jobs:
               // Parse the current body
               let body = release.data.body;
               
+              console.log(`Current release body: ${body}`);
+              
               // Update the status of the current component
-              const componentPattern = new RegExp(`${component}:.*$`, 'im');
-              body = body.replace(componentPattern, `${component}: :white_check_mark: Ready`);
+              const componentPattern = new RegExp(`- ${component}:.*$`, 'im');
+              body = body.replace(componentPattern, `- ${component}: :white_check_mark: Ready`);
+              
+              console.log(`Updated body with ${component} status: ${body}`);
               
               // Check if all components are ready
               const allReady = [
-                'Builder: :white_check_mark: Ready',
-                'API: :white_check_mark: Ready',
-                'Operator: :white_check_mark: Ready',
-                'UI: :white_check_mark: Ready'
+                '- Builder: :white_check_mark: Ready',
+                '- API: :white_check_mark: Ready',
+                '- Operator: :white_check_mark: Ready',
+                '- UI: :white_check_mark: Ready'
               ].every(status => body.includes(status));
               
-              // Update the release
+              console.log(`All components ready? ${allReady}`);
+              
               if (allReady) {
                 // All components are ready, make final release
+                const finalBody = `## Docker images for \`${version}\`
+
+              | Component | Pull command |
+              |-----------|--------------|
+              | Builder   | \`docker pull unbindapp/unbind-builder:${version}\` |
+              | API       | \`docker pull unbindapp/unbind-api:${version}\` |
+              | Operator  | \`docker pull unbindapp/unbind-operator:${version}\` |
+              | Web       | \`docker pull unbindapp/unbind-ui:${version}\` |`;
+                
+                console.log(`Finalizing release with body: ${finalBody}`);
+                
                 await github.rest.repos.updateRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: releaseId,
                   name: `Unbind ${version}`,
-                  body: `## Docker images for \`${version}\`
-                  | Component | Pull command |
-                  |-----------|--------------|
-                  | Builder   | [\`docker pull unbindapp/unbind-builder:${version}\`](https://hub.docker.com/r/unbindapp/unbind-builder/tags?name=${version}) |
-                  | API       | [\`docker pull unbindapp/unbind-api:${version}\`](https://hub.docker.com/r/unbindapp/unbind-api/tags?name=${version}) |
-                  | Operator  | [\`docker pull unbindapp/unbind-operator:${version}\`](https://hub.docker.com/r/unbindapp/unbind-operator/tags?name=${version}) |
-                  | Web       | [\`docker pull unbindapp/unbind-ui:${version}\`](https://hub.docker.com/r/unbindapp/unbind-ui/tags?name=${version}) |`,
+                  body: finalBody,
+                  draft: false,
                   prerelease: false
                 });
                 
