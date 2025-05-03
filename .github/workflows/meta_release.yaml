@@ -122,18 +122,17 @@ jobs:
               }
               console.log(`Tentative updated body:\n${body}`);
 
-              const requiredStatuses = [
-                '- Builder: Ready',
-                '- API: Ready',
-                '- Operator: Ready',
-                '- UI: Ready'
-              ];
-              const allReady = requiredStatuses.every(status => body.includes(status));
-
+              const lowercaseBody = body.toLowerCase();
+              const allReady = 
+                lowercaseBody.includes('- builder: ready') && 
+                lowercaseBody.includes('- api: ready') && 
+                lowercaseBody.includes('- operator: ready') && 
+                lowercaseBody.includes('- ui: ready');
+              
               console.log(`All components ready? ${allReady}`);
 
               if (allReady) {
-                const finalBody = `## Docker images for ${version} are available!
+                const finalBody = `## Unbind ${version} images!
 
             | Component | Image Tag | Pull Command |
             |-----------|-----------|--------------|
