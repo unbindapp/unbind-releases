@@ -5,40 +5,40 @@ on:
     tags:
       - 'v*.*.*'
   repository_dispatch:
-    types: [image-ready]
+    types: [image-ready] # Triggered by component builds finishing
 
 jobs:
   dispatch-builds:
-    name: Dispatch Builds
+    name: Create Release & Dispatch Builds
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: Get the version
+      - name: Get the version from tag
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      # Create a release to track progress
-      - name: Create Release
+      # Create a GitHub Release marked as pre-release to track progress
+      - name: Create Draft Pre-Release
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.get_version.outputs.VERSION }}
-          release_name: Unbind ${{ steps.get_version.outputs.VERSION }} (In Progress)
+          release_name: Unbind ${{ steps.get_version.outputs.VERSION }} (Building...)
           body: |
-            Release in progress...
+            Builds initiated for release ${{ steps.get_version.outputs.VERSION }}. Status updates will follow.
 
             ## Component Status:
-            - Builder: :hourglass: In Progress
-            - API: :hourglass: Waiting
-            - Operator: :hourglass: In Progress
-            - UI: :hourglass: In Progress
+            - Builder: In Progress
+            - API: In Progress
+            - Operator: In Progress
+            - UI: In Progress
           draft: false
-          prerelease: true
+          prerelease: true # Start as pre-release
 
-      # Step 1: Trigger unbind-builder build first
-      - name: Trigger unbind-builder build
+      # Trigger all component builds simultaneously
+      - name: Trigger Builder + API Build
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PAT_TOKEN }}
@@ -47,11 +47,11 @@ jobs:
           client-payload: |
             {
               "version": "${{ steps.get_version.outputs.VERSION }}",
-              "release_id": "${{ steps.create_release.outputs.id }}"
+              "release_id": "${{ steps.create_release.outputs.id }}",
+              "builder_image": "unbindapp/unbind-builder:${{ steps.get_version.outputs.VERSION }}"
             }
 
-      # Also trigger operator and UI in parallel
-      - name: Trigger unbind-operator build
+      - name: Trigger Operator Build
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PAT_TOKEN }}
@@ -63,11 +63,11 @@ jobs:
               "release_id": "${{ steps.create_release.outputs.id }}"
             }
 
-      - name: Trigger unbind-ui build
+      - name: Trigger UI Build
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          repository: unbindapp/unbind
+          repository: unbindapp/unbind # Adjust repo name if different for UI
           event-type: build-release
           client-payload: |
             {
@@ -76,109 +76,105 @@ jobs:
             }
 
   update-status:
+    name: Update Release Status
+    concurrency:
+      group: release-status-${{ github.event.client_payload.release_id }}
+      cancel-in-progress: false
+    # Run only when a component build sends 'image-ready'
     if: github.event_name == 'repository_dispatch' && github.event.action == 'image-ready'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Update release status
+      - name: Update Release Body and Finalize if Ready
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // Get current release info
             const releaseId = '${{ github.event.client_payload.release_id }}';
             const version = '${{ github.event.client_payload.version }}';
-            const component = '${{ github.event.client_payload.component }}';
+            const component = '${{ github.event.client_payload.component }}'; // e.g., 'builder', 'api', 'operator', 'ui'
+            // Basic capitalization for display name in the release notes
+            const componentDisplay = component.charAt(0).toUpperCase() + component.slice(1);
 
-            console.log(`Processing component: ${component} for version ${version}`);
+            // Validate inputs (basic check)
+            if (!releaseId || !version || !component) {
+              core.setFailed('Missing required payload data: release_id, version, or component.');
+              return;
+            }
+            console.log(`Received 'image-ready' for component: ${componentDisplay}, Version: ${version}, Release ID: ${releaseId}`);
 
             try {
-              // First get the current release data
-              const release = await github.rest.repos.getRelease({
+              // Get the current release data
+              const { data: release } = await github.rest.repos.getRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: releaseId
               });
-              
-              // Parse the current body
-              let body = release.data.body;
-              
-              console.log(`Current release body: ${body}`);
-              
-              // Update the status of the current component
-              const componentPattern = new RegExp(`- ${component}:.*$`, 'im');
-              body = body.replace(componentPattern, `- ${component}: :white_check_mark: Ready`);
-              
-              console.log(`Updated body with ${component} status: ${body}`);
-              
-              // Check if all components are ready
-              const allReady = [
-                '- Builder: :white_check_mark: Ready',
-                '- API: :white_check_mark: Ready',
-                '- Operator: :white_check_mark: Ready',
-                '- UI: :white_check_mark: Ready'
-              ].every(status => body.includes(status));
-              
-              console.log(`All components ready? ${allReady}`);
-              
-              if (allReady) {
-                // All components are ready, make final release
-                const finalBody = `## Docker images for \`${version}\`
 
-              | Component | Pull command |
-              |-----------|--------------|
-              | Builder   | \`docker pull unbindapp/unbind-builder:${version}\` |
-              | API       | \`docker pull unbindapp/unbind-api:${version}\` |
-              | Operator  | \`docker pull unbindapp/unbind-operator:${version}\` |
-              | Web       | \`docker pull unbindapp/unbind-ui:${version}\` |`;
-                
-                console.log(`Finalizing release with body: ${finalBody}`);
-                
-                await github.rest.repos.updateRelease({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: releaseId,
-                  name: `Unbind ${version}`,
-                  body: finalBody,
-                  draft: false,
-                  prerelease: false
-                });
-                
-                console.log(`All components are ready! Final release created for ${version}.`);
+              let body = release.body;
+              console.log(`Current release body:\n${body}`);
+
+              // Update the status line for the reporting component
+              const componentPattern = new RegExp(`^- ${componentDisplay}:.*$`, 'im'); // Find line starting with "- ComponentName:"
+              const newStatusLine = `- ${componentDisplay}: Ready`; // Simple ready status
+
+              if (body.match(componentPattern)) {
+                body = body.replace(componentPattern, newStatusLine);
+                console.log(`Updated status for ${componentDisplay}.`);
               } else {
-                // Update status but keep as prerelease
+                // If the line wasn't found (e.g., initial body format changed), append it.
+                console.warn(`Pattern for ${componentDisplay} not found in release body. Appending status.`);
+                body += `\n${newStatusLine}`;
+              }
+              console.log(`Tentative updated body:\n${body}`);
+
+              // Define the statuses required for the final release
+              const requiredStatuses = [
+                '- Builder: Ready',
+                '- API: Ready',
+                '- Operator: Ready',
+                '- UI: Ready'
+              ];
+              // Check if *all* required statuses are now present in the body
+              const allReady = requiredStatuses.every(status => body.includes(status));
+
+              console.log(`All components ready? ${allReady}`);
+
+              if (allReady) {
+                // All components are ready, prepare the final release content
+                const finalBody = `## Docker images for \`${version}\` are available!
+
+            | Component | Image Tag | Pull Command |
+            |-----------|-----------|--------------|
+            | Builder   | \`unbindapp/unbind-builder:${version}\` | \`docker pull unbindapp/unbind-builder:${version}\` |
+            | API       | \`unbindapp/unbind-api:${version}\`     | \`docker pull unbindapp/unbind-api:${version}\`     |
+            | Operator  | \`unbindapp/unbind-operator:${version}\`| \`docker pull unbindapp/unbind-operator:${version}\`|
+            | UI / Web  | \`unbindapp/unbind-ui:${version}\`      | \`docker pull unbindapp/unbind-ui:${version}\`      |`; // Adjust names/repos as needed
+
+                console.log(`Finalizing release ${releaseId} for version ${version}.`);
                 await github.rest.repos.updateRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: releaseId,
-                  body: body,
-                  prerelease: true
+                  name: `Unbind ${version}`, // Final release name
+                  body: finalBody,
+                  prerelease: false // <-- Set to false to finalize the release
                 });
-                
-                console.log(`Updated status for ${component}. Waiting for other components...`);
-              }
-              
-            } catch (error) {
-              console.error(`Error updating release: ${error.message}`);
-              core.setFailed(error.message);
-            }
+                console.log(`Release ${releaseId} successfully finalized.`);
 
-  continue-after-image:
-    if: github.event_name == 'repository_dispatch' && github.event.action == 'image-ready' && github.event.client_payload.component == 'builder'
-    runs-on: ubuntu-latest
-    needs: update-status
-    steps:
-      - name: Trigger API build with builder image
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: unbindapp/unbind-api
-          event-type: build-release
-          client-payload: |
-            {
-              "version": "${{ github.event.client_payload.version }}",
-              "builder_image": "unbindapp/unbind-builder:${{ github.event.client_payload.version }}",
-              "release_id": "${{ github.event.client_payload.release_id }}"
+              } else {
+                // Not all components are ready yet, just update the body with the latest status
+                console.log(`Updating release ${releaseId} body, still waiting for other components.`);
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: releaseId,
+                  body: body
+                  // prerelease remains true by default unless explicitly changed
+                });
+                console.log(`Release ${releaseId} status updated for ${componentDisplay}.`);
+              }
+
+            } catch (error) {
+              console.error(`Error processing update for release ${releaseId}: ${error.message}`);
+              core.setFailed(`Failed to update release: ${error.message}`);
             }
