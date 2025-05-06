@@ -1,0 +1,17 @@
+{
+  "v0.0.1": {
+    "version": "v0.0.2",
+    "description": "Initial release",
+    "breaking": false
+  },
+  "v0.0.2": {
+    "version": "v0.0.2",
+    "description": "Feature update",
+    "breaking": false
+  },
+  "v0.0.3": {
+    "version": "v0.0.3",
+    "description": "Feature update",
+    "breaking": false
+  }
+}
