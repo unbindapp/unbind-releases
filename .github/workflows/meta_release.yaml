@@ -48,7 +48,7 @@ jobs:
             {
               "version": "${{ steps.get_version.outputs.VERSION }}",
               "release_id": "${{ steps.create_release.outputs.id }}",
-              "builder_image": "unbindapp/unbind-builder:${{ steps.get_version.outputs.VERSION }}"
+              "builder_image": "ghcr.io/unbindapp/unbind-builder:${{ steps.get_version.outputs.VERSION }}"
             }
 
       - name: Trigger Operator Build
@@ -132,14 +132,28 @@ jobs:
               console.log(`All components ready? ${allReady}`);
 
               if (allReady) {
-                const finalBody = `## Unbind ${version} images!
-
-            | Component | Image Tag | Pull Command |
-            |-----------|-----------|--------------|
-            | Builder   | \`unbindapp/unbind-builder:${version}\` | \`docker pull unbindapp/unbind-builder:${version}\` |
-            | API       | \`unbindapp/unbind-api:${version}\`     | \`docker pull unbindapp/unbind-api:${version}\`     |
-            | Operator  | \`unbindapp/unbind-operator:${version}\`| \`docker pull unbindapp/unbind-operator:${version}\`|
-            | UI / Web  | \`unbindapp/unbind-ui:${version}\`      | \`docker pull unbindapp/unbind-ui:${version}\`      |`;
+                const finalBody = [
+                  "## 🚀 Unbind ${version} Release",
+                  "",
+                  "### 📦 Container Images",
+                  "",
+                  "| Component | Image | Pull Command |",
+                  "|-----------|-------|--------------|",
+                  "| Builder   | [`ghcr.io/unbindapp/unbind-builder:${version}`](https://github.com/unbindapp/unbind-api/pkgs/container/unbind-builder/${version}) | `docker pull ghcr.io/unbindapp/unbind-builder:${version}` |",
+                  "| API       | [`ghcr.io/unbindapp/unbind-api:${version}`](https://github.com/unbindapp/unbind-api/pkgs/container/unbind-api/${version}) | `docker pull ghcr.io/unbindapp/unbind-api:${version}` |",
+                  "| Operator  | [`ghcr.io/unbindapp/unbind-operator:${version}`](https://github.com/unbindapp/unbind-operator/pkgs/container/unbind-operator/${version}) | `docker pull ghcr.io/unbindapp/unbind-operator:${version}` |",
+                  "| UI / Web  | [`ghcr.io/unbindapp/unbind-ui:${version}`](https://github.com/unbindapp/unbind/pkgs/container/unbind-ui/${version}) | `docker pull ghcr.io/unbindapp/unbind-ui:${version}` |",
+                  "",
+                  "### 🔗 Component Repositories",
+                  "",
+                  "- [Builder & API](https://github.com/unbindapp/unbind-api/releases/tag/${version})",
+                  "- [Operator](https://github.com/unbindapp/unbind-operator/releases/tag/${version})",
+                  "- [UI / Web](https://github.com/unbindapp/unbind/releases/tag/${version})",
+                  "",
+                  "### 📝 Release Notes",
+                  "",
+                  "For detailed release notes, please check the individual component repositories linked above."
+                ].join("\n");
 
                 console.log(`Finalizing release ${releaseId} for version ${version}.`);
                 await github.rest.repos.updateRelease({
