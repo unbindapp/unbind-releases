@@ -68,5 +68,10 @@
     "version": "v0.0.14",
     "description": "Feature update",
     "breaking": false
+  },
+  "v0.0.15": {
+    "version": "v0.0.15",
+    "description": "Feature update",
+    "breaking": false
   }
 }
